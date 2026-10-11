@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from collections.abc import Iterable, Sequence
@@ -39,6 +40,14 @@ BOTS: dict[str, dict[str, Any]] = {
         "apps": {"greptile-apps"},
     },
 }
+
+
+# Human comments that explicitly ask a bot to review.
+MENTIONS = {
+    "coderabbit": re.compile(r"(?<![\w.])@coderabbitai\b", re.IGNORECASE),
+    "greptile": re.compile(r"(?<![\w.])@greptile(?:ai)?\b", re.IGNORECASE),
+}
+COPILOT_REVIEWERS = {"copilot", *BOTS["copilot"]["logins"]}
 
 
 def bot_name(value: str) -> str:
@@ -76,11 +85,43 @@ def pr_activity(
     return activity
 
 
+def explicit_requests(
+    issue_comments: Iterable[dict[str, Any]], timeline: Iterable[dict[str, Any]]
+) -> list[tuple[str, str]]:
+    """Return (bot, timestamp) pairs for reviews someone explicitly asked for.
+
+    Counts human comments mentioning a bot and Copilot reviewer requests. Bot
+    comments are ignored because bots quote their own trigger commands.
+    """
+    requests = []
+    for comment in issue_comments:
+        if (
+            bot_for_login(_login(comment))
+            or (comment.get("user") or {}).get("type") == "Bot"
+        ):
+            continue
+        for bot, pattern in MENTIONS.items():
+            if pattern.search(comment.get("body") or ""):
+                requests.append((bot, comment["created_at"]))
+    for event in timeline:
+        reviewer = (_login(event, "requested_reviewer") or "").lower()
+        if event.get("event") == "review_requested" and reviewer in COPILOT_REVIEWERS:
+            requests.append(("copilot", event["created_at"]))
+    return requests
+
+
 def last_used_bot(
-    activity: Iterable[tuple[str, str]], recorded: tuple[str, str] | None = None
+    activity: Iterable[tuple[str, str]],
+    recorded: tuple[str, str] | None = None,
+    requests: Iterable[tuple[str, str]] = (),
 ) -> str | None:
-    """Pick the bot with the newest activity; a workflow-recorded request counts too."""
-    candidates = [*activity, *([recorded] if recorded and all(recorded) else [])]
+    """Pick the most recently requested bot, else the bot with the newest activity.
+
+    Explicit requests (including one recorded in workflow state) win, because
+    automatic reviews and summary edits do not show which bot the user chose.
+    """
+    chosen = [*requests, *([recorded] if recorded and all(recorded) else [])]
+    candidates = chosen or list(activity)
     return max(candidates, key=lambda pair: pair[1])[0] if candidates else None
 
 
@@ -142,17 +183,21 @@ def _pr() -> tuple[str, int, str]:
 
 
 def detect(base: str, number: int) -> str | None:
+    issue_comments = _api_list(f"{base}/issues/{number}/comments")
     activity = pr_activity(
         _api_list(f"{base}/pulls/{number}/reviews"),
-        _api_list(f"{base}/issues/{number}/comments"),
+        issue_comments,
         _api_list(f"{base}/pulls/{number}/comments"),
+    )
+    requests = explicit_requests(
+        issue_comments, _api_list(f"{base}/issues/{number}/timeline")
     )
     recorded = None
     if review_state.state_path().exists():
         value = review_state.load()
         if value.get("pr_number") == number:
             recorded = (value.get("review_bot"), value.get("requested_after"))
-    return last_used_bot(activity, recorded)
+    return last_used_bot(activity, recorded, requests)
 
 
 def trigger(bot: str, number: int) -> None:

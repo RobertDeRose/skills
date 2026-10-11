@@ -61,6 +61,53 @@ class LastUsedBotTests(unittest.TestCase):
         self.assertIsNone(request_review.last_used_bot(activity))
 
 
+class ExplicitRequestTests(unittest.TestCase):
+    def test_explicit_request_beats_newer_automatic_activity(self):
+        requests = request_review.explicit_requests(
+            [
+                {**comment("RobertDeRose", AFTER), "body": "@greptile review"},
+                {**comment("coderabbitai[bot]", LATER), "body": "@coderabbitai help"},
+            ],
+            [],
+        )
+        activity = [("coderabbit", LATER)]
+        self.assertEqual(requests, [("greptile", AFTER)])
+        self.assertEqual(
+            request_review.last_used_bot(activity, None, requests), "greptile"
+        )
+
+    def test_detects_mentions_and_copilot_reviewer_requests(self):
+        requests = request_review.explicit_requests(
+            [
+                {**comment("octocat", BEFORE), "body": "@CodeRabbitAI full review"},
+                {**comment("octocat", AFTER), "body": "please ask @greptileai"},
+                {**comment("octocat", LATER), "body": "email me@greptile.example"},
+            ],
+            [
+                {
+                    "event": "review_requested",
+                    "created_at": LATER,
+                    "requested_reviewer": {"login": "Copilot"},
+                },
+                {
+                    "event": "review_requested",
+                    "created_at": LATER,
+                    "requested_reviewer": {"login": "octocat"},
+                },
+            ],
+        )
+        self.assertEqual(
+            sorted(requests),
+            [("coderabbit", BEFORE), ("copilot", LATER), ("greptile", AFTER)],
+        )
+
+    def test_recorded_request_competes_with_explicit_requests(self):
+        self.assertEqual(
+            request_review.last_used_bot([], ("copilot", LATER), [("greptile", AFTER)]),
+            "copilot",
+        )
+
+
 class CompletionSignalTests(unittest.TestCase):
     def signal(self, bot, reviews=(), comments=(), statuses=(), runs=()):
         return request_review.completion_signal(

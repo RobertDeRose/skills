@@ -2,7 +2,7 @@
 name: gh-pr-review
 description: Collect, review, and resolve any bot or human feedback on the current branch's GitHub PR, including Copilot, CodeRabbit, Greptile, GitHub Actions, and SonarQube. Use for PR review comments, bot reviews, review threads, or re-reviews. First action after reading this skill is to run scripts/fetch_comments.py; it returns the numbered Markdown ledger and evidence, with no custom parser needed.
 metadata:
-  version: "0.17.0"
+  version: "0.17.1"
 allowed-tools: Read Glob Grep Edit Write Bash AskUserQuestion Agent Task subagents_enable subagent subagent_supervisor
 ---
 
@@ -378,8 +378,10 @@ Otherwise, find the review bot most recently used on this PR (Copilot, CodeRabbi
 python3 <skill-dir>/scripts/request_review.py last
 ```
 
-It compares the bots' reviews, comments, and the last request recorded in state, and prints `copilot`, `coderabbit`, or
-`greptile`. Exit status 2 means no supported bot has been used on this PR.
+It prints `copilot`, `coderabbit`, or `greptile`: the bot most recently asked for a review, through a human `@coderabbitai`
+or `@greptile`/`@greptileai` comment, a Copilot reviewer request, or a request recorded in state. Automatic reviews and
+summary edits do not count unless no review was ever requested, in which case the bot with the newest activity is used.
+Exit status 2 means no supported bot has been used on this PR.
 
 Persist phase `awaiting_rereview_decision`, then ask once. Name the detected bot and offer the others, for example:
 `Trigger another CodeRabbit review of <short head SHA>? Reply yes, no, or name a bot (copilot, coderabbit, greptile).`
