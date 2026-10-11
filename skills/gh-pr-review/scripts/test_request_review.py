@@ -1,3 +1,4 @@
+import argparse
 import unittest
 
 import request_review
@@ -17,6 +18,24 @@ def comment(login, created_at, updated_at=None):
         "created_at": created_at,
         "updated_at": updated_at or created_at,
     }
+
+
+class BotNameTests(unittest.TestCase):
+    def test_accepts_names_logins_and_mentions(self):
+        for value, expected in [
+            ("Copilot", "copilot"),
+            ("CodeRabbit", "coderabbit"),
+            ("code rabbit", "coderabbit"),
+            ("@coderabbitai", "coderabbit"),
+            ("coderabbitai[bot]", "coderabbit"),
+            ("@greptileai", "greptile"),
+            ("greptile-apps[bot]", "greptile"),
+        ]:
+            self.assertEqual(request_review.bot_name(value), expected, value)
+
+    def test_rejects_unsupported_bots(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            request_review.bot_name("sourcery")
 
 
 class LastUsedBotTests(unittest.TestCase):

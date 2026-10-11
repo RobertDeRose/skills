@@ -2,7 +2,7 @@
 name: gh-pr-review
 description: Collect, review, and resolve any bot or human feedback on the current branch's GitHub PR, including Copilot, CodeRabbit, Greptile, GitHub Actions, and SonarQube. Use for PR review comments, bot reviews, review threads, or re-reviews. First action after reading this skill is to run scripts/fetch_comments.py; it returns the numbered Markdown ledger and evidence, with no custom parser needed.
 metadata:
-  version: "0.16.0"
+  version: "0.17.0"
 allowed-tools: Read Glob Grep Edit Write Bash AskUserQuestion Agent Task subagents_enable subagent subagent_supervisor
 ---
 
@@ -381,14 +381,23 @@ python3 <skill-dir>/scripts/request_review.py last
 It compares the bots' reviews, comments, and the last request recorded in state, and prints `copilot`, `coderabbit`, or
 `greptile`. Exit status 2 means no supported bot has been used on this PR.
 
-Persist phase `awaiting_rereview_decision`, then ask once, naming the bot, for example: `Trigger another CodeRabbit review
-of <short head SHA>?` If no bot was found, ask which one to use instead. Note that requests may spend the user's AI
-credits. End the assistant turn normally. Do not trigger a review on your own initiative, including for green CI,
-resolved threads, or a clean refreshed snapshot.
+Persist phase `awaiting_rereview_decision`, then ask once. Name the detected bot and offer the others, for example:
+`Trigger another CodeRabbit review of <short head SHA>? Reply yes, no, or name a bot (copilot, coderabbit, greptile).`
+If no bot was found, ask which one to use. Note that requests may spend the user's AI credits. End the assistant turn
+normally. Do not trigger a review on your own initiative, including for green CI, resolved threads, or a clean refreshed
+snapshot.
+
+Interpret the answer:
 
 - **No**, or any explicit opt-out: assess the final refreshed snapshot, persist `complete`, and report that no fresh
   review was requested. Never present the run as a completed re-review.
-- **Yes**: request the bot the question named, or the bot the user chose instead. Then wait for it:
+- **Yes** with no bot: request the bot the question named.
+- **A bot name**, alone or with yes (for example `greptile` or `yes, coderabbit`): request that bot instead, passing it
+  as `--bot`. Common spellings such as `CodeRabbit`, `coderabbitai`, or `@greptileai` are accepted.
+- **An unsupported bot** or an ambiguous answer: say which bots are supported, ask once more, and end the turn. Never
+  guess a bot.
+
+To request and await the chosen bot:
 
   ```bash
   python3 <skill-dir>/scripts/request_review.py request [--bot copilot|coderabbit|greptile]

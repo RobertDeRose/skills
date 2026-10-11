@@ -41,6 +41,16 @@ BOTS: dict[str, dict[str, Any]] = {
 }
 
 
+def bot_name(value: str) -> str:
+    """Normalize a user-supplied bot name, accepting logins and @mentions."""
+    key = value.strip().lstrip("@").lower().replace(" ", "").replace("-", "")
+    key = key.removesuffix("[bot]").removesuffix("ai").removesuffix("apps")
+    if key in BOTS:
+        return key
+    message = f"unsupported review bot {value!r}; choose from {', '.join(sorted(BOTS))}"
+    raise argparse.ArgumentTypeError(message)
+
+
 def bot_for_login(login: str | None) -> str | None:
     login = (login or "").lower()
     return next((name for name, bot in BOTS.items() if login in bot["logins"]), None)
@@ -193,7 +203,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("last", help="Print the review bot most recently used on this PR")
     request = sub.add_parser("request", help="Trigger a review and record it in state")
     request.add_argument(
-        "--bot", choices=sorted(BOTS), help="Override the detected bot"
+        "--bot",
+        type=bot_name,
+        help="Override the detected bot: copilot, coderabbit, or greptile",
     )
     waiter = sub.add_parser(
         "wait", help="Block until the recorded review request finishes"
