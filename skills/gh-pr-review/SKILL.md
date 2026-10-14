@@ -2,7 +2,7 @@
 name: gh-pr-review
 description: Collect, review, and resolve any bot or human feedback on the current branch's GitHub PR, including Copilot, CodeRabbit, Greptile, GitHub Actions, and SonarQube. Use for PR review comments, bot reviews, review threads, or re-reviews. First action after reading this skill is to run scripts/fetch_comments.py; it returns the numbered Markdown ledger and evidence, with no custom parser needed.
 metadata:
-  version: "0.17.1"
+  version: "0.18.0"
 allowed-tools: Read Glob Grep Edit Write Bash AskUserQuestion Agent Task subagents_enable subagent subagent_supervisor
 ---
 
@@ -72,8 +72,9 @@ A terminal workflow report is permitted only in one of these states:
 
 **Ending an assistant turn does not complete the workflow.** At `awaiting_selection`, `awaiting_clarification`, or
 `awaiting_rereview_decision`, save state, present the ledger or question once, and end the turn normally using the final
-response channel. Resume when the user responds. Never simulate waiting by emitting more text, repeating pause
-statements, polling, or keeping the turn open. Do not change the phase to a terminal state merely to end a turn.
+response channel. Presenting the ledger always means including the table in your reply, not pointing at command
+output. Resume when the user responds. Never simulate waiting by emitting more text, repeating pause statements,
+polling, or keeping the turn open. Do not change the phase to a terminal state merely to end a turn.
 
 At `implementing`, normal turn-ending progress messages are also allowed when the host requires yielding for native
 worker notifications. Record the running assignments and next trigger; resume automatically when notified. This is not
@@ -118,6 +119,9 @@ terminal states; selection and clarification prompts are normal turn-ending resp
   Report that limitation; never claim external issue coverage that was not collected.
 - Preserve existing behavior, architecture, APIs, workflows, and design. Stop for approval when a valid item requires a
   behavioral, architectural, API, workflow, or design-scope change.
+- Judge every comment against the PR's goal, not in isolation. A review loop must not grow the PR by patching each
+  comment where it lands. Real issues outside the goal are deferred, and repeated symptoms of one design flaw are raised
+  as that flaw (see "Anchor assessment to the PR goal").
 - Prefer the smallest correct fix and group related fixes into independently reviewable Conventional Commits.
 - Do not use `--no-verify` or skip commit signing. Stop if signing fails.
 - Never request a bot review without asking first. After each disposition-complete pass with green CI, ask whether to
@@ -141,6 +145,27 @@ A SonarQube issue has no GitHub thread to reply to or resolve. Track its disposi
 Authors may be GitHub objects, external-provider strings (such as SonarQube issue authors), or absent; the collector
 normalizes these shapes without inferring a bot/user type for string identities.
 
+### Anchor assessment to the PR goal
+
+Before assessing rows, establish the PR's goal and approved scope from
+`gh pr view --json title,body,closingIssuesReferences`, any linked issue or design document, and the base diff
+(`git diff --stat <base>...HEAD`). On later passes, keep the first pass's goal and diff size as the baseline. Then assess each row against that goal:
+
+- **Within the goal and correct:** `Valid` / `fix`.
+- **A real issue, but outside the goal** (adjacent cleanup, unrelated hardening, a new abstraction, a test framework, a
+  feature the PR never set out to add): `Valid` / `reply, no code change`, with an action such as
+  `Out of scope; defer to follow-up`. The user can still select it, but do not recommend it.
+- **Several rows, or the same area across passes, pointing at one underlying problem:** do not propose a patch per
+  comment. Record the related rows in one group and raise the root cause as a single `Requires clarification` row that
+  names the design problem and the alternatives, for example narrowing the change or revisiting the approach.
+- **A fix that would only be needed because of an earlier review-pass patch:** question that earlier patch before
+  stacking another one on it.
+
+When proposing actions, check that the combined fixes still serve the goal. If a pass would materially grow the diff
+beyond the baseline, or add files, modules, or machinery the goal did not call for, say so in the selection request.
+
+### Record assessments
+
 Assess rows using the supplied command (repeat for each row):
 
 ```bash
@@ -152,7 +177,9 @@ python3 <skill-dir>/scripts/review_state.py render
 ```
 
 `update` changes only the named row; `validate` rejects missing/duplicate coverage and pending assessments; `render`
-prints the required table directly. State is authoritative after updates; packet artifacts are collection snapshots.
+prints the required table. Keep `--summary` and `--action` to about 60 characters each; `render` cuts longer text with
+`…` so the table fits a terminal. Full detail belongs in replies and commit bodies, not the table. State is
+authoritative after updates; packet artifacts are collection snapshots.
 Use `show` (or its `status` alias) for saved state and `phase <name>` for transitions. Use `selection '1,3'` to record the
 user's approved row numbers. Use `item 1` to inspect a row's normalized evidence and
 exact reply/resolve targets without parsing the full snapshot. `render --history` includes previously collected rows
@@ -178,27 +205,30 @@ by source and count rather than expanded in the user-facing table.
 
 Use a compact Markdown table:
 
-| # | Source             | Classification | Disposition | Issue summary | Proposed action | Resolvable | Group |
-|---|--------------------|----------------|-------------|---------------|-----------------|------------|-------|
-| 1 | Inline thread      | Valid          | fix         | …             | …               | yes        | A     |
-| 2 | Summary finding    | Invalid        | no action, context recorded | … | —              | no         | —     |
+| # | Source          | Classification | Disposition                 | Issue | Action | Group |
+|---|-----------------|----------------|-----------------------------|-------|--------|-------|
+| 1 | Inline thread   | Valid          | fix                         | …     | …      | A     |
+| 2 | Summary finding | Invalid        | no action, context recorded | …     | —      | —     |
 
 Before making changes, run `review_state.py validate` to verify complete coverage and assessments, then persist phase
-`awaiting_selection`. Present the rendered ledger and one concise request for the user's selection of valid or
-clarification items, then end the assistant turn normally. This pauses the workflow without completing it. Do not append
-a pass summary, repeated waiting statements, or claims of completion. Do not modify code, commit, push, reply, resolve,
+`awaiting_selection`. Copy the exact `render` output into your reply as a Markdown table, followed by one concise
+request for the user's selection of valid or clarification items, then end the assistant turn normally. Command output
+is not rendered as Markdown and may be truncated, so never refer to it as already shown. This pauses the workflow
+without completing it. Do not append a pass summary, repeated waiting statements, or claims of completion. Do not modify code, commit, push, reply, resolve,
 or request another review before the user responds.
 
 For a re-review, identify the newest submission from the recorded `review_bot` after the recorded `requested_after`
 timestamp. Process its `review_findings` before any Phase 6 decision, including findings in `Previously missed` or `Suppressed comments`
 sections. A review with `Findings: None` can still contain actionable findings. Historical findings from older review
 summaries must not be silently re-selected; retain them as context unless the current review explicitly carries them
-forward.
+forward. Re-review findings on code the previous pass added deserve extra scrutiny: prefer simplifying or reverting
+that patch over layering another fix on it.
 
 The user may select issue numbers such as `1, 3`. Interpret ranges and phrases such as `all valid` against the displayed
 ledger. Account for every expressly named row, including invalid/context-only rows; never silently drop one because of
 its classification. A selected valid item is approved for implementation. An unselected valid item is rejected for this
-pass. For a rejected valid item, use the user's reason or reply exactly `Won't change.`
+pass. For a rejected valid item, use the user's reason; for a row deferred as out of scope, state that it is
+out of this PR's scope; otherwise reply exactly `Won't change.`
 For a selected clarification item, persist phase `awaiting_clarification`, ask the missing question once, and end the
 assistant turn normally. When the user answers, update the existing ledger and resume the saved workflow.
 
@@ -300,7 +330,8 @@ For each selected valid item or explicit user-requested change:
 1. inspect the complete execution path and surrounding code;
 2. independently evaluate any proposed solution;
 3. add or update a failing behavioral regression test first when practical;
-4. implement the smallest correct fix;
+4. implement the smallest correct fix that serves the PR goal; if the fix grows into new scope or design work, stop
+   and ask instead of expanding the PR;
 5. update documentation when delivered behavior or contracts change.
 
 Documentation-only, test-only, build-only, or genuinely untestable findings may omit a regression test, but record why.

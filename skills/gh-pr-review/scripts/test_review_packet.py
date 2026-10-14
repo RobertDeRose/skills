@@ -230,13 +230,25 @@ class PacketTests(unittest.TestCase):
         self.assertIn("Related thread rows: #1", packet)
         self.assertIn("````text\n" + body + "\n````", packet)
 
-    def test_table_escapes_external_delimiters_and_html(self):
+    def test_table_escapes_external_delimiters(self):
         result = snapshot()
         ledger = review_packet.make_ledger(result["items"])
-        ledger[0]["summary"] = "<img src=x>|\nnext [link](bad)"
+        ledger[0]["summary"] = "<img src=x>|\nnext [link](bad) & more"
         rendered = review_packet.render_ledger(ledger)
-        self.assertIn("&lt;img src=x&gt;\\| next", rendered)
+        self.assertIn("<img src=x>\\| next \\[link\\](bad) & more", rendered)
         self.assertEqual(len(rendered.splitlines()), 5)
+
+    def test_table_caps_free_text_cells(self):
+        result = snapshot()
+        ledger = review_packet.make_ledger(result["items"])
+        ledger[0]["summary"] = "word " * 40
+        ledger[0]["proposed_action"] = "short action"
+        rendered = review_packet.render_ledger(ledger)
+        summary = rendered.splitlines()[2].split(" | ")[4]
+        self.assertEqual(len(summary), review_packet.LEDGER_TEXT_LIMIT)
+        self.assertTrue(summary.endswith("…"))
+        self.assertIn("| short action |", rendered)
+        self.assertNotIn("Resolvable", rendered)
 
 
 class StateTests(unittest.TestCase):

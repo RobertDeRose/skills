@@ -284,32 +284,40 @@ def validate_ledger(
                 raise ValueError("Only valid rows may authorize fixes")
 
 
-def cell(value: object) -> str:
-    # Neutralize raw HTML/Markdown and line breaks in generated table cells.
-    text = str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+LEDGER_TEXT_LIMIT = 60
+
+
+def cell(value: object, limit: int | None = None) -> str:
+    # Neutralize Markdown and line breaks in generated table cells. Terminal and
+    # Markdown renderers show inline HTML as text, so entity escaping would only
+    # leak literal &amp;/&lt; into the table.
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if limit is not None and len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
     text = text.replace("\\", "\\\\")
     for character in ("|", "`", "*", "_", "[", "]"):
         text = text.replace(character, "\\" + character)
-    return re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 def render_ledger(ledger: list[dict[str, Any]]) -> str:
+    # Keep the table narrow enough for a terminal: free-text cells are capped and
+    # thread resolvability stays in the evidence sections and `item` output.
     lines = [
-        "| # | Source | Classification | Disposition | Issue summary | Proposed action | Resolvable | Group |",
-        "|---|---|---|---|---|---|---|---|",
+        "| # | Source | Classification | Disposition | Issue | Action | Group |",
+        "|---|---|---|---|---|---|---|",
     ]
     for row in ledger:
         values = [
-            row["number"],
-            row["source"],
-            row["classification"],
-            row["disposition"],
-            row["summary"],
-            row["proposed_action"],
-            "yes" if row["resolvable"] else "no",
-            row["group"],
+            cell(row["number"]),
+            cell(row["source"]),
+            cell(row["classification"]),
+            cell(row["disposition"]),
+            cell(row["summary"], LEDGER_TEXT_LIMIT),
+            cell(row["proposed_action"], LEDGER_TEXT_LIMIT),
+            cell(row["group"]),
         ]
-        lines.append("| " + " | ".join(cell(value) for value in values) + " |")
+        lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines) + "\n"
 
 
